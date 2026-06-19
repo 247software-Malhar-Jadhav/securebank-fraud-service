@@ -1,0 +1,96 @@
+# =============================================================================
+# SecureBank fraud-service — default (local) configuration.
+#
+# Runs fully offline out of the box: the AI api-key is BLANK, so the assistant and
+# insights summary use the deterministic provider. Set securebank.ai.api-key (env /
+# secret) to enable the live LLM path (Claude, model claude-opus-4-8).
+# =============================================================================
+
+spring:
+  application:
+    name: securebank-fraud-service
+
+  # Java 21 virtual threads: blocking work (LLM HTTP, Redis) scales without big pools.
+  threads:
+    virtual:
+      enabled: true
+
+  # Redis is the ONLY stateful store (cache). No relational datasource is configured.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+
+# HTTP port for actuator + the optional REST surface + Swagger UI.
+server:
+  port: 8084
+
+# gRPC server (net.devh) — the canonical inter-service contract (FraudService).
+grpc:
+  server:
+    port: 9094
+
+# -----------------------------------------------------------------------------
+# AI configuration. Bound to com.securebank.fraud.config.AiProperties.
+#   enabled  - master switch (true: may use LLM if a key is present).
+#   base-url - Anthropic-style endpoint.
+#   api-key  - BLANK by default => graceful degradation to deterministic provider.
+#   model    - platform-wide Claude Opus 4.8.
+# -----------------------------------------------------------------------------
+securebank:
+  ai:
+    enabled: ${SECUREBANK_AI_ENABLED:true}
+    base-url: ${SECUREBANK_AI_BASE_URL:https://api.anthropic.com}
+    api-key: ${SECUREBANK_AI_API_KEY:}
+    model: ${SECUREBANK_AI_MODEL:claude-opus-4-8}
+
+# -----------------------------------------------------------------------------
+# Resilience4j: circuit breaker + retry guarding the LLM call (instance "llmProvider").
+# When the endpoint fails/slows, the breaker opens and calls short-circuit to the
+# fallback, which the orchestrator turns into a deterministic answer.
+# -----------------------------------------------------------------------------
+resilience4j:
+  circuitbreaker:
+    instances:
+      llmProvider:
+        sliding-window-size: 10
+        failure-rate-threshold: 50          # open when >=50% of recent calls fail
+        wait-duration-in-open-state: 30s    # stay open 30s before half-open trial
+        permitted-number-of-calls-in-half-open-state: 2
+        slow-call-duration-threshold: 6s
+        slow-call-rate-threshold: 80
+        register-health-indicator: true
+  retry:
+    instances:
+      llmProvider:
+        max-attempts: 2                     # one retry on transient failures
+        wait-duration: 300ms
+
+# -----------------------------------------------------------------------------
+# Actuator + Prometheus.
+# -----------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,circuitbreakers
+  endpoint:
+    health:
+      show-details: always
+      # Enable liveness/readiness probe groups used by the k8s probes.
+      probes:
+        enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# springdoc / Swagger UI.
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    com.securebank.fraud: INFO

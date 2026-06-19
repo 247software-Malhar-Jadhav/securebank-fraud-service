@@ -1,0 +1,26 @@
+# =============================================================================
+# SecureBank fraud-service — "docker" profile overrides.
+#
+# Activated with SPRING_PROFILES_ACTIVE=docker (set in the Dockerfile / compose / k8s).
+# Differs from the default profile only in how it reaches Redis and the AI key source:
+# inside the cluster Redis is the service "redis", and the AI key comes from a secret.
+# =============================================================================
+
+spring:
+  data:
+    redis:
+      # In docker-compose / k8s, Redis is reachable by its service name.
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+
+securebank:
+  ai:
+    enabled: ${SECUREBANK_AI_ENABLED:true}
+    base-url: ${SECUREBANK_AI_BASE_URL:https://api.anthropic.com}
+    # Injected from the Kubernetes secret (or compose env). Blank => deterministic.
+    api-key: ${SECUREBANK_AI_API_KEY:}
+    model: ${SECUREBANK_AI_MODEL:claude-opus-4-8}
+
+logging:
+  level:
+    com.securebank.fraud: INFO
