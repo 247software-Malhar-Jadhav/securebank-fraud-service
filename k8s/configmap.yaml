@@ -1,0 +1,16 @@
+# Non-secret configuration for fraud-service. Mounted as environment variables.
+# The AI api-key is intentionally NOT here — it lives in the Secret (secret.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraud-service-config
+  labels:
+    app: fraud-service
+data:
+  SPRING_PROFILES_ACTIVE: "docker"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  SECUREBANK_AI_ENABLED: "true"
+  SECUREBANK_AI_BASE_URL: "https://api.anthropic.com"
+  # Platform-wide model. Code also defaults to this constant.
+  SECUREBANK_AI_MODEL: "claude-opus-4-8"

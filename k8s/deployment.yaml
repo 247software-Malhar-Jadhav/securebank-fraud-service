@@ -1,0 +1,63 @@
+# Deployment for fraud-service. Pulls non-secret config from the ConfigMap and the AI key
+# from the Secret. Exposes container ports 8084 (HTTP) and 9094 (gRPC).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-service
+  labels:
+    app: fraud-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fraud-service
+  template:
+    metadata:
+      labels:
+        app: fraud-service
+      annotations:
+        # Let Prometheus scrape the actuator endpoint.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8084"
+        prometheus.io/path: "/actuator/prometheus"
+    spec:
+      containers:
+        - name: fraud-service
+          image: securebank/fraud-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8084
+            - name: grpc
+              containerPort: 9094
+          # Non-secret config.
+          envFrom:
+            - configMapRef:
+                name: fraud-service-config
+          # AI key from the Secret (blank by default => deterministic mode).
+          env:
+            - name: SECUREBANK_AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: fraud-service-secrets
+                  key: SECUREBANK_AI_API_KEY
+          # Liveness/readiness via actuator health (Spring Boot health groups).
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

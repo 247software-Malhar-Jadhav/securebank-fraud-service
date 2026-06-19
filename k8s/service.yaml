@@ -1,0 +1,19 @@
+# ClusterIP Service for fraud-service. The service is cluster-internal only (not public);
+# the gateway calls it over gRPC (port 9094) and other tooling can hit HTTP (8084).
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-service
+  labels:
+    app: fraud-service
+spec:
+  type: ClusterIP
+  selector:
+    app: fraud-service
+  ports:
+    - name: http
+      port: 8084
+      targetPort: http
+    - name: grpc
+      port: 9094
+      targetPort: grpc
