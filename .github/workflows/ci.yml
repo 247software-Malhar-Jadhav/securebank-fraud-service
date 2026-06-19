@@ -1,0 +1,30 @@
+# CI for securebank-fraud-service: build, run tests, and verify the Docker image builds.
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Compiles, generates gRPC stubs from the vendored protos, and runs unit tests.
+      - name: Build and test
+        run: mvn -B -ntp verify
+
+      # Sanity-check that the multi-stage Docker image builds.
+      - name: Build Docker image
+        run: docker build -t securebank/fraud-service:ci .
