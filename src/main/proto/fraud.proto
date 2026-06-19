@@ -1,0 +1,52 @@
+// FraudService gRPC contract.
+//
+// fraud-service is the AI brain. It scores transactions for fraud risk (Strategy
+// pattern: rule-based + statistical), answers the "Ask SecureBank" assistant queries,
+// and produces spending insights. The LLM call (Claude, model "claude-opus-4-8") is
+// wrapped in a circuit breaker and degrades to a deterministic provider when no API
+// key is configured. transaction-service calls Score() synchronously over gRPC during
+// a transfer; the gateway routes /assistant and /insights here.
+syntax = "proto3";
+
+package securebank.fraud.v1;
+
+import "common.proto";
+
+option java_multiple_files = true;
+option java_package = "com.securebank.contracts.fraud.v1";
+
+service FraudService {
+  rpc Score    (ScoreRequest)    returns (ScoreResult);
+  rpc Ask      (AskRequest)      returns (AskReply);
+  rpc Insights (InsightsRequest) returns (InsightsReply);
+}
+
+message ScoreRequest {
+  string from_account_id = 1;
+  string to_account_id   = 2;
+  securebank.common.v1.Money amount = 3;
+  string customer_id     = 4;
+}
+
+message ScoreResult {
+  double score    = 1;  // 0.0 (safe) .. 1.0 (fraud)
+  string decision = 2;  // ALLOW | REVIEW | BLOCK
+  repeated string reasons = 3;
+}
+
+message AskRequest {
+  string user_id  = 1;
+  string question = 2;
+  string locale   = 3; // en | hi | mr
+}
+message AskReply {
+  string answer    = 1;
+  bool   from_llm  = 2; // false => deterministic fallback was used
+}
+
+message InsightsRequest { string customer_id = 1; string locale = 2; }
+message CategorySpend  { string category = 1; securebank.common.v1.Money total = 2; }
+message InsightsReply {
+  repeated CategorySpend breakdown = 1;
+  string summary = 2; // natural-language, localized
+}
