@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    securebank-fraud-service
+    ========================
+    The "AI brain" of the SecureBank platform. It is a gRPC SERVER exposing FraudService:
+      * Score    - fraud scoring using the STRATEGY pattern (rule-based + statistical).
+      * Ask      - the "Ask SecureBank" assistant using the ADAPTER pattern over an
+                   AiProvider (LLM-backed or deterministic), wrapped in a CIRCUIT BREAKER.
+      * Insights - spending category breakdown + a localized natural-language summary.
+
+    Design choices made explicit here:
+      - No relational DB. State/caching uses Redis (Spring Data Redis). Insights are
+        computed from data passed in or a small in-memory demo dataset; in production this
+        service would query the ledger read-model of transaction-service.
+      - The LLM call degrades GRACEFULLY to a deterministic provider when no API key is
+        set (the default), so the service is always functional offline.
+      - We VENDOR the proto files into src/main/proto and generate stubs locally (rather
+        than depending on the securebank-contracts jar), so this repo builds standalone.
+  -->
+
+  <groupId>com.securebank</groupId>
+  <artifactId>securebank-fraud-service</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <name>SecureBank Fraud Service</name>
+  <description>AI microservice: fraud scoring, the Ask SecureBank assistant, and spending insights.</description>
+
+  <!--
+    Inherit from spring-boot-starter-parent for curated, mutually-compatible dependency
+    versions and the spring-boot-maven-plugin (repackage into an executable fat jar).
+  -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.5</version>
+    <relativePath/>
+  </parent>
+
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!--
+      Pinned, mutually-compatible gRPC/protobuf versions. grpc-java 1.65.x is built
+      against protobuf-java 3.25.x. We reuse these coordinates for BOTH the runtime
+      libraries and the protoc plugin binaries so generators match the runtime.
+    -->
+    <protobuf.version>3.25.5</protobuf.version>
+    <grpc.version>1.65.1</grpc.version>
+    <javax.annotation.version>1.3.2</javax.annotation.version>
+
+    <!-- net.devh gRPC Spring Boot starter (server side). -->
+    <grpc.spring.boot.version>3.1.0.RELEASE</grpc.spring.boot.version>
+
+    <!-- Build-time plugin versions. -->
+    <protobuf.maven.plugin.version>0.6.1</protobuf.maven.plugin.version>
+    <os.maven.plugin.version>1.7.1</os.maven.plugin.version>
+  </properties>
+
+  <dependencies>
+    <!-- ===== Web / Actuator / OpenAPI ===== -->
+    <!-- Spring Web gives us the actuator HTTP surface and optional REST controllers. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <!-- Bean validation for request DTOs (optional REST). -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <!-- Actuator: health, info, prometheus scrape endpoint. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <!-- Micrometer -> Prometheus registry for /actuator/prometheus. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <!-- springdoc: OpenAPI 3 + Swagger UI for the optional REST surface. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+      <version>2.6.0</version>
+    </dependency>
+
+    <!-- ===== Redis (cache / state; no relational DB) ===== -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-cache</artifactId>
+    </dependency>
+
+    <!-- ===== Resilience4j (circuit breaker + retry on the LLM call) ===== -->
+    <!-- Spring Boot 3 starter wires Resilience4j into Spring + actuator + micrometer. -->
+    <dependency>
+      <groupId>io.github.resilience4j</groupId>
+      <artifactId>resilience4j-spring-boot3</artifactId>
+      <version>2.2.0</version>
+    </dependency>
+    <!-- AOP is required for the @CircuitBreaker / @Retry annotations to take effect. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-aop</artifactId>
+    </dependency>
+
+    <!-- ===== gRPC server via net.devh starter ===== -->
+    <dependency>
+      <groupId>net.devh</groupId>
+      <artifactId>grpc-server-spring-boot-starter</artifactId>
+      <version>${grpc.spring.boot.version}</version>
+    </dependency>
+    <!-- gRPC runtime libs the generated code links against (pinned to the generators). -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-protobuf</artifactId>
+      <version>${grpc.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+      <version>${grpc.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>${protobuf.version}</version>
+    </dependency>
+    <!-- protoc-gen-grpc-java emits @javax.annotation.Generated; needed to compile stubs. -->
+    <dependency>
+      <groupId>javax.annotation</groupId>
+      <artifactId>javax.annotation-api</artifactId>
+      <version>${javax.annotation.version}</version>
+    </dependency>
+
+    <!-- ===== Lombok (constructor-injection boilerplate, builders, logging) ===== -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- ===== Test ===== -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!--
+      os-maven-plugin EXTENSION: populates ${os.detected.classifier} (e.g. linux-x86_64)
+      so protobuf-maven-plugin can fetch the correct native protoc / grpc codegen binary.
+    -->
+    <extensions>
+      <extension>
+        <groupId>kr.motd.maven</groupId>
+        <artifactId>os-maven-plugin</artifactId>
+        <version>${os.maven.plugin.version}</version>
+      </extension>
+    </extensions>
+
+    <plugins>
+      <!--
+        protobuf-maven-plugin: runs protoc over src/main/proto in the generate-sources
+        phase. 'compile' -> message classes; 'compile-custom' (grpc-java) -> service stubs
+        (including the FraudServiceGrpc base class our gRPC server endpoint extends).
+      -->
+      <plugin>
+        <groupId>org.xolstice.maven.plugins</groupId>
+        <artifactId>protobuf-maven-plugin</artifactId>
+        <version>${protobuf.maven.plugin.version}</version>
+        <configuration>
+          <protoSourceRoot>${project.basedir}/src/main/proto</protoSourceRoot>
+          <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
+          <pluginId>grpc-java</pluginId>
+          <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>compile</goal>
+              <goal>compile-custom</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!--
+        Spring Boot plugin: repackages into an executable jar. We exclude Lombok from the
+        final artifact since it is a compile-time-only annotation processor.
+      -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <exclude>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+            </exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
