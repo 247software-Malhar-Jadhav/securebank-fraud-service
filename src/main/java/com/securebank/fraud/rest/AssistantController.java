@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -31,6 +32,10 @@ import java.util.List;
  * <p>The gateway forwards the resolved user as {@code X-User-Id}; we read it where useful.</p>
  */
 @RestController
+// The gateway forwards the path unchanged (it does not strip /api), and the other
+// services mount their controllers under /api, so this controller must too — otherwise
+// /api/assistant/ask and /api/insights/spending 404 at the service.
+@RequestMapping("/api")
 @Tag(name = "Assistant & Insights",
         description = "Ask SecureBank assistant and spending insights (optional REST mirror of the gRPC API).")
 public class AssistantController {
